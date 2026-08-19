@@ -5225,7 +5225,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     // an over-long word (= a CJK run) per character. So a line break is a wrap iff
     // the first word of the next row would NOT have fit on this row at the
     // terminal width W — otherwise wrap-ansi would have kept it on this row.
-    function unwrapTerminal(text, W) {
+    function unwrapTerminal(text, W, rowStartRe, protect) {
       const lines = text.split('\n');
       if (!W) { W = 0; for (const l of lines) W = Math.max(W, ccWidth(l.replace(/\s+$/, ''))); }
       if (W < 40) return text; // not a terminal paste; leave alone
@@ -5235,7 +5235,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       for (let i = 0; i < lines.length; i++) {
         let cur = lines[i];
         if (/^\s*(```|~~~)/.test(cur)) { inFence = !inFence; out.push(cur); continue; }
-        if (inFence) { out.push(cur); continue; }
+        if (inFence || (protect && protect.has(i))) { out.push(cur); continue; }
         // Tool output is code-like (one record per line), where a nearly full
         // line followed by another line is normal — never rejoin it. Only the
         // prose parts (replies, prompts, tool-call lines, thinking) are unwrapped.
@@ -5249,7 +5249,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         let row = cur; // the terminal row most recently appended (the fit test is per row)
         while (i + 1 < lines.length) {
           const nxt = lines[i + 1];
-          if (CC_BLOCK_START.test(nxt)) break;
+          if (protect && protect.has(i + 1)) break;
+          if (CC_BLOCK_START.test(nxt) || (rowStartRe && rowStartRe.test(nxt))) break;
           const nIndent = nxt.match(/^\s*/)[0].length;
           if (nIndent < contentCol) break;                    // dedented → not a continuation
           const body = nxt.slice(contentCol);                 // keeps an extra leading space (exact-fit quirk)
@@ -5287,42 +5288,268 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     ];
     const CC_THINKING = /^\s*[✻✽✶✳∴·*]?\s*Thinking…?\s*$/;
 
-    // Inside a reply: box-drawn tables → markdown tables, rules → ---, frames dropped.
-    function ccReplyLines(body) {
-      const out = [];
-      const blankBefore = () => { if (out.length && out[out.length - 1].trim()) out.push(''); };
-      let tableStart = -1, sawSep = false;
-      // GFM needs a header separator and blank lines around a table (a following
-      // text line would otherwise be swallowed as a row).
-      const endTable = (next) => {
-        if (tableStart >= 0) {
-          if (!sawSep) {
-            const cols = (out[tableStart].match(/\|/g) || []).length - 1;
-            out.splice(tableStart + 1, 0, '|' + ' --- |'.repeat(Math.max(1, cols)));
-          }
-          if (next !== undefined && next.trim()) out.push('');
-        }
-        tableStart = -1; sawSep = false;
-      };
-      for (const l of body) {
-        if (/^\s*[┌┏╔╭][─━═┬┳╦]*[┐┓╗╮]\s*$/.test(l) || /^\s*[└┗╚╰][─━═┴┻╩]*[┘┛╝╯]\s*$/.test(l)) continue;
-        const sep = /^\s*[├┣╠╞][─━═┼╪┿╋]*[┤┫╣╡]\s*$/.test(l);
-        const row = /^\s*[│┃║](.*[│┃║].*)[│┃║]\s*$/.exec(l);   // ≥ 1 interior separator = a table row
-        if (sep && tableStart >= 0) {
-          if (!sawSep) { const cols = (out[out.length - 1].match(/\|/g) || []).length - 1; out.push('|' + ' --- |'.repeat(Math.max(1, cols))); sawSep = true; }
-          continue;
-        }
-        if (row) {
-          if (tableStart < 0) { blankBefore(); tableStart = out.length; sawSep = false; }
-          out.push('| ' + row[1].split(/[│┃║]/).map((c) => c.trim().replace(/\|/g, '\\|')).join(' | ') + ' |');
-          continue;
-        }
-        endTable(l);
-        if (/^\s*[─━═]{3,}\s*$/.test(l)) { blankBefore(); out.push('---'); continue; } // rule (never a setext underline)
-        if (/^\s*[│┃║](\s.*)?[│┃║]\s*$/.test(l)) continue;      // framed non-table line = chrome
-        out.push(l);
+    // ---- inside a reply ----
+    // What Claude Code's terminal renderer (v2.1.x) makes of markdown, and how we
+    // map it back:
+    //   table (top level) → box grid: ┌─┬─┐ / │ c │ c │ / ├─┼─┤ between EVERY row /
+    //                       └─┴─┘, cells wrapped to column width (multi-line rows,
+    //                       vertically centred), header centred          → | md table |
+    //                       too tall/wide → "vertical" layout: "Key: value" lines per
+    //                       row, rows separated by a ─×≤40 line             → | md table |
+    //   table (nested)    → | pipe | table |                                 (already md)
+    //   blockquote        → "▎ text"                                          → "> text"
+    //   hr                → "---"                                              (already md)
+    //   heading           → bold text only (marker lost)                    → heuristic ###
+    //   code block        → bare code lines (no fences)                       (kept as text;
+    //                       leading # / > and <tags> escaped so they stay literal)
+    const CC_SEP_RE = /^\s*─+\s*$/; // (a wrapped separator leaves a short ─ tail on the next line)
+    const ccFenceFor = (body) => { let n = 3; for (const m of body.matchAll(/`{3,}/g)) n = Math.max(n, m[0].length + 1); return '`'.repeat(n); };
+    // A terminal copy has no code fences. A blank-separated block is taken for
+    // code when it has internal indentation (prose never does once unwrapped)
+    // or when most of its lines are code-shaped.
+    const CC_CODEY = /^\s*(?:\$ |#!|#\s|\/\/|#include|import |from |def |class |const |let |var |return\b|if \(|for \(|while \(|try\b|except\b|[{}]|<\/?[a-zA-Z]|export |async |await |function\b|public |private |package |use |fn |pub |print\()|[;{}]\s*$/;
+    // Indices of raw transcript lines that sit in a bare code block (blank- and
+    // marker-delimited block, tested after removing its common indent).
+    function ccCodeLineSet(lines) {
+      const set = new Set();
+      // block delimiters: blank lines, turn markers, box drawing / UI chrome
+      const delim = (l) => !l.trim() || /^[⏺●>❯]|^\s*[⎿╭╰╮╯┌┐└┘├┤│─━═┃║]/.test(l) || CC_NOISE.some((re) => re.test(l));
+      let k = 0;
+      while (k < lines.length) {
+        if (delim(lines[k])) { k++; continue; }
+        let e = k;
+        while (e + 1 < lines.length && !delim(lines[e + 1])) e++;
+        const blk = lines.slice(k, e + 1);
+        const base = Math.min(...blk.map((l) => l.match(/^\s*/)[0].length));
+        if (ccLooksLikeCode(blk.map((l) => l.slice(base)))) for (let q = k; q <= e; q++) set.add(q);
+        k = e + 1;
       }
-      endTable();
+      return set;
+    }
+    function ccLooksLikeCode(blk) {
+      if (blk.length < 2) return false;
+      if (blk.every((l) => /^\s*\|/.test(l))) return false;                              // pipe table
+      // internal indentation = a line indented deeper than the block's first line
+      // that is not a wrapped continuation (those sit exactly at the previous
+      // line's content column) and not a nested list item
+      const indented = blk.some((l, idx) => idx > 0 && /^\s{2,}/.test(l)
+        && !/^\s*(?:[-*+•]\s|\d+[.)]\s|[a-z][.)]\s|▎)/.test(l)
+        && l.match(/^\s*/)[0].length !== ccContentCol(blk[idx - 1]));
+      if (indented && !/^\s*(?:[-*+•]\s|\d+[.)]\s)/.test(blk[0])) return true;
+      const codey = blk.filter((l) => CC_CODEY.test(l)).length;
+      return codey >= Math.ceil(blk.length * 0.6);
+    }
+    // Rejoin a table cell that was wrapped onto several lines. Cells wrap at
+    // spaces, or per character when a word is wider than the column (CJK runs,
+    // long URLs / identifiers). pieces: strings, or {t, full} where full = the
+    // piece filled its column exactly (a per-character break is then likely).
+    function ccJoinPieces(pieces) {
+      let out = '', prevFull = false;
+      for (const raw of pieces) {
+        const p = typeof raw === 'string' ? raw : raw.t;
+        const full = typeof raw === 'string' ? false : !!raw.full;
+        if (!p) continue;
+        if (!out) { out = p; prevFull = full; continue; }
+        const a = Array.from(out).pop(), b = Array.from(p)[0];
+        let sep = ' ';
+        if (ccIsCJK(a) && ccIsCJK(b)) sep = '';
+        else if (prevFull && (ccIsCJK(a) || ccIsCJK(b))) sep = '';
+        else if (prevFull && /[\/:._#@-]/.test(out.split(' ').pop() + p.split(' ')[0])) sep = ''; // URL / path / identifier
+        out += sep + p;
+        prevFull = full;
+      }
+      return out;
+    }
+    const ccMdRow = (cells) => '| ' + cells.map((c) => c.replace(/\|/g, '\\|')).join(' | ') + ' |';
+    const ccMdSep = (n) => '|' + ' --- |'.repeat(Math.max(1, n));
+
+    // "Key: value" prefix of a vertical-table row line.
+    function ccKeyOf(line) {
+      const m = /^\s*([^\s:：|─│┌└├▎-][^:：]{0,39}?):(?:\s|$)/.exec(line);
+      return m ? m[1].trim() : null;
+    }
+    // Keys of vertically laid-out tables in these lines: keys shared by two
+    // ─-separated neighbouring segments (works for several tables in one reply).
+    function ccVerticalKeys(lines) {
+      const segs = [[]];
+      for (const l of lines) {
+        if (CC_SEP_RE.test(l)) { if (segs[segs.length - 1].length) segs.push([]); } else segs[segs.length - 1].push(l);
+      }
+      const keys = new Set();
+      const keySet = (seg) => new Set(seg.map(ccKeyOf).filter(Boolean));
+      for (let k = 0; k + 1 < segs.length; k++) {
+        const a = keySet(segs[k]), b = keySet(segs[k + 1]);
+        for (const x of a) if (b.has(x)) keys.add(x);
+      }
+      return keys.size ? keys : null;
+    }
+    function ccRowStartRe(keys) {
+      if (!keys) return null;
+      const esc = (k) => k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('^\\s*(?:' + Array.from(keys).map(esc).join('|') + '):(?:\\s|$)');
+    }
+
+    // Box grid → md table. `block` = the lines from ┌ (or first │) to └ inclusive.
+    function ccGridToMd(block) {
+      const segs = [[]];
+      let seps = 0;
+      for (const l of block) {
+        if (/^\s*[┌┏╔╭└┗╚╰]/.test(l)) continue;                    // top / bottom border
+        if (/^\s*[├┣╠╞]/.test(l)) { seps++; segs.push([]); continue; } // row separator
+        const m = /^\s*[│┃║](.*)[│┃║]\s*$/.exec(l);
+        // cell = " text padded " → full when the text spans the whole column
+        if (m) segs[segs.length - 1].push(m[1].split(/[│┃║]/).map((c) => ({ t: c.trim(), full: ccWidth(c) - 2 <= ccWidth(c.trim()) })));
+      }
+      const texts = (r) => r.map((c) => c.t);
+      const rowsOf = (seg) => {                                   // visual lines → logical rows
+        if (!seg.length) return [];
+        const ncol = Math.max(...seg.map((r) => r.length));
+        const merged = [];
+        for (let c = 0; c < ncol; c++) merged.push(ccJoinPieces(seg.map((r) => r[c] || '')));
+        return [merged];
+      };
+      let header, body = [];
+      if (seps === 0) {                                           // no separators (truncated copy): one row per line
+        header = texts(segs[0][0] || []);
+        body = segs[0].slice(1).map(texts);
+      } else if (seps >= 2) {
+        header = rowsOf(segs[0])[0];
+        for (let k = 1; k < segs.length; k++) body.push(...rowsOf(segs[k]));
+      } else {
+        header = rowsOf(segs[0])[0];
+        // one separator only: either a single (multi-line) row, or one row per
+        // line (older layout). All cells filled on every line → one row per line.
+        const seg = segs[1] || [];
+        const allFilled = seg.length > 1 && seg.every((r) => r.every((c) => c.t));
+        body = allFilled ? seg.map(texts) : rowsOf(seg);
+      }
+      if (!header || !header.length) return [];
+      const n = header.length;
+      const out = [ccMdRow(header), ccMdSep(n)];
+      for (const r of body) { while (r.length < n) r.push(''); out.push(ccMdRow(r.slice(0, n))); }
+      return out;
+    }
+
+    // Vertical layout → md table. `lines` = reply lines; returns [outLines].
+    function ccVerticalToMd(lines, keys) {
+      const rowStart = ccRowStartRe(keys);
+      const out = [];
+      let i = 0;
+      while (i < lines.length) {
+        // a row = a run of key lines (each key line + its non-blank continuation)
+        if (!(rowStart && rowStart.test(lines[i]))) { out.push(lines[i]); i++; continue; }
+        const rows = [];
+        let ordered = null;                                       // key order of the first row
+        for (;;) {
+          const row = new Map();
+          const order = [];
+          while (i < lines.length && rowStart.test(lines[i])) {
+            const key = ccKeyOf(lines[i]);
+            const parts = [lines[i].replace(/^\s*[^:：]*:\s*/, '')];
+            i++;
+            while (i < lines.length && lines[i].trim() && !rowStart.test(lines[i]) && !CC_SEP_RE.test(lines[i])) { parts.push(lines[i].trim()); i++; }
+            row.set(key, ccJoinPieces(parts.map((p) => p.trim())));
+            order.push(key);
+          }
+          if (!order.length) break;
+          rows.push(row);
+          if (!ordered) ordered = order;
+          // next row follows a ─ line (possibly wrapped onto two lines)
+          let j = i;
+          while (j < lines.length && CC_SEP_RE.test(lines[j])) j++;
+          if (j > i && j < lines.length && rowStart.test(lines[j])) { i = j; continue; }
+          break;
+        }
+        if (rows.length === 1 && rows[0].size === 1) {           // a lone "Key: value" line is prose
+          out.push(...Array.from(rows[0]).map(([k, v]) => k + ': ' + v));
+          continue;
+        }
+        if (out.length && out[out.length - 1].trim()) out.push('');
+        out.push(ccMdRow(ordered), ccMdSep(ordered.length));
+        for (const r of rows) out.push(ccMdRow(ordered.map((k) => r.get(k) || '')));
+        // trailing "… N more rows not shown" after a ─ line: keep as text
+        let j = i;
+        while (j < lines.length && CC_SEP_RE.test(lines[j])) j++;
+        if (j > i && j < lines.length && /^\s*…\s*\d/.test(lines[j])) i = j;
+        if (i < lines.length && lines[i].trim()) out.push('');
+      }
+      return out;
+    }
+
+    // Bold-only headings: a short standalone line (its own block) without
+    // sentence punctuation, with content following → ### heading.
+    function ccLooksLikeHeading(l, hasMore) {
+      if (!l || !hasMore) return false;
+      if (/^\s/.test(l)) return false;
+      const t = l.trim();
+      if (Array.from(t).length < 3 || ccWidth(t) < 5 || ccWidth(t) > 50) return false;
+      if (/[。．.!?！？,、:：;；]$/.test(t)) return false;
+      if (/^([-*+•]|\d+[.)]|[a-z][.)]|[|─┌└├│▎#>`<\[!]|https?:)/.test(t)) return false;
+      if (/: |：/.test(t)) return false;
+      if (!/[\p{L}]/u.test(t)) return false;
+      if (!/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u.test(t)) {
+        if (/^[a-z]/.test(t) && /^[\x20-\x7e]+$/.test(t)) return false;   // "npm run build"
+        if (/[=(){}\[\]<>\/\\|$&;`_]/.test(t)) return false;              // code-ish characters
+      }
+      return true;
+    }
+
+    function ccReplyLines(body) {
+      // 1) box grids → md tables (line-run based)
+      const step1 = [];
+      for (let k = 0; k < body.length; k++) {
+        const l = body[k];
+        if (/^\s*[┌┏╔╭][─━═┬┳╦]*[┐┓╗╮]\s*$/.test(l) || /^\s*[│┃║].*[│┃║].*[│┃║]\s*$/.test(l)) {
+          let e = k;
+          while (e + 1 < body.length && /^\s*[┌┏╔╭│┃║├┣╠╞└┗╚╰]/.test(body[e + 1])) e++;
+          const md = ccGridToMd(body.slice(k, e + 1));
+          if (md.length) {
+            if (step1.length && step1[step1.length - 1].trim()) step1.push('');
+            step1.push(...md);
+            if (e + 1 < body.length && body[e + 1].trim()) step1.push('');
+            k = e;
+            continue;
+          }
+        }
+        if (/^\s*[│┃║](\s.*)?[│┃║]\s*$/.test(l)) continue;         // framed non-table line = chrome
+        step1.push(l);
+      }
+      // 2) vertical tables → md tables
+      const keys = ccVerticalKeys(step1);
+      const step2 = keys ? ccVerticalToMd(step1, keys) : step1;
+      // 3) blocks: bare code → fenced; otherwise line-level fixes
+      const out = [];
+      let k = 0;
+      while (k < step2.length) {
+        if (!step2[k].trim()) { if (out.length && out[out.length - 1] !== '') out.push(''); k++; continue; }
+        let e = k;
+        while (e + 1 < step2.length && step2[e + 1].trim()) e++;
+        const blk = step2.slice(k, e + 1);
+        const hasMore = step2.slice(e + 1).some((x) => x.trim());
+        if (ccLooksLikeCode(blk)) {
+          const f = ccFenceFor(blk.join('\n'));
+          out.push(f, ...blk, f);
+          k = e + 1;
+          continue;
+        }
+        for (const raw of blk) {
+          let l = raw;
+          if (CC_SEP_RE.test(l)) {
+            if (out.length && out[out.length - 1] === '---') continue;  // wrapped tail of the same rule
+            if (out.length && out[out.length - 1].trim()) out.push('');
+            out.push('---');
+            continue;
+          }
+          if (/^\s*▎/.test(l)) { out.push(l.replace(/^(\s*)▎\s?/, '$1> ')); continue; } // blockquote
+          if (/^\s*\|/.test(l)) { out.push(l); continue; }             // pipe table row: leave
+          // rendered text never carries markdown markers, so leading # / > and
+          // <tags> are literal (typically code) — keep them literal
+          l = l.replace(/^(\s*)(#{1,6})(?=\s|$)/, '$1\\$2').replace(/^(\s*)>(?=\s|$)/, '$1\\>').replace(/<(?=[A-Za-z/!?])/g, '&lt;');
+          if (blk.length === 1 && ccLooksLikeHeading(l, hasMore)) l = '### ' + l.trim();
+          out.push(l);
+        }
+        k = e + 1;
+      }
       return out;
     }
 
@@ -5334,7 +5561,6 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       const indentOf = (l) => l.match(/^\s*/)[0].length;
       const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
       const stripHint = (s) => s.replace(/\s*\((?:ctrl\+[eor]|shift\+↓) to expand\)/g, '');
-      const fenceFor = (body) => { let n = 3; for (const m of body.matchAll(/`{3,}/g)) n = Math.max(n, m[0].length + 1); return '`'.repeat(n); };
       const blank = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
       let i = 0;
       // Consume the lines indented ≥ col (blank lines included), stopping before the
@@ -5352,7 +5578,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         blank();
         out.push('<details class="' + cls + '"' + (toolMode === 'open' ? ' open' : '') + '><summary>' + summary + '</summary>', '');
         if (bodyLines.length) {
-          if (asCode) { const f = fenceFor(bodyLines.join('\n')); out.push(f, ...bodyLines, f, ''); }
+          if (asCode) { const f = ccFenceFor(bodyLines.join('\n')); out.push(f, ...bodyLines, f, ''); }
           else out.push(...bodyLines, '');
         }
         out.push('</details>');
@@ -5442,7 +5668,12 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       const isCC = looksLikeClaudeCode(lines);
       let W = 0;
       for (const l of lines) W = Math.max(W, ccWidth(l.replace(/\s+$/, '')));
-      if (opts.unwrap) text = unwrapTerminal(text, W);
+      // rows of vertically laid-out tables must survive unwrapping as separate lines
+      const rowStartRe = isCC ? ccRowStartRe(ccVerticalKeys(lines)) : null;
+      // bare code blocks keep their lines (a nearly full code line followed by
+      // another line is normal there)
+      const protect = isCC ? ccCodeLineSet(lines) : null;
+      if (opts.unwrap) text = unwrapTerminal(text, W, rowStartRe, protect);
       if (opts.cc && isCC) {
         text = ccStructure(text.split('\n'), opts.tools || 'fold').join('\n');
         text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n');
