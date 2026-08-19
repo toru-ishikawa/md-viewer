@@ -371,6 +371,43 @@
       background: var(--bg);
       color: var(--fg);
     }
+    /* Claude Code 出力の整形オプション（ペーストペイン 2 段目） */
+    .paste-opts {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 4px 14px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      color: var(--fg-2);
+    }
+    .paste-opts label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
+    .paste-opts input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    .paste-opts .po-tools { display: inline-flex; align-items: center; gap: 6px; }
+    .paste-opts .seg button { padding: 2px 8px; min-width: 0; }
+    .paste-opts.cc-off .po-tools { opacity: .45; pointer-events: none; }
+    /* 整形後のツール呼び出し / 思考ブロック（<details>、既定で畳む） */
+    #preview details.cc-tool, #preview details.cc-thinking {
+      margin: .7em 0;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      font-size: .92em;
+    }
+    #preview details.cc-tool > summary, #preview details.cc-thinking > summary {
+      padding: 5px 10px;
+      cursor: pointer;
+      color: var(--fg-2);
+      overflow-wrap: anywhere;
+    }
+    #preview details.cc-tool > summary code { font-size: .95em; }
+    #preview details.cc-tool .cc-res { color: var(--muted); margin-left: 6px; }
+    #preview details.cc-thinking > summary { font-style: italic; }
+    #preview details.cc-tool > pre { margin: 0 10px 10px; }
+    #preview details.cc-thinking > :not(summary) { margin-left: 10px; margin-right: 10px; }
+    #preview details.cc-thinking > :nth-child(2) { margin-top: 0; }
+    #preview details.cc-thinking > :last-child { margin-bottom: 10px; }
 
     #toc {
       width: 230px;
@@ -4170,13 +4207,25 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         <button id="paste-clear">クリア</button>
         <span class="paste-hint">貼り付けで即プレビュー・下書きは自動保存</span>
       </div>
-      <textarea id="paste-input" spellcheck="false" placeholder="ここに markdown を貼り付け（KaTeX / mermaid / 表 / SVG 対応）"></textarea>
+      <div class="paste-opts" id="paste-opts">
+        <label title="ターミナル幅で折り返された行を元の 1 行に戻す"><input type="checkbox" id="po-unwrap"> 折り返し解除</label>
+        <label title="Claude Code の出力（⏺ 返答 / ⎿ ツール結果 / > プロンプト）を整形。枠線・スピナー等のノイズも除去"><input type="checkbox" id="po-cc"> Claude Code 整形</label>
+        <span class="po-tools">
+          <span class="pop-label">ツール呼び出し</span>
+          <span class="seg" id="po-tools">
+            <button type="button" data-val="fold" title="クリックで展開できる形に畳む">畳む</button>
+            <button type="button" data-val="open" title="展開した状態で表示">開く</button>
+            <button type="button" data-val="drop" title="ツール呼び出しと結果を表示しない">消す</button>
+          </span>
+        </span>
+      </div>
+      <textarea id="paste-input" spellcheck="false" placeholder="ここに貼り付け（Claude Code のターミナル出力 / markdown。KaTeX・mermaid・表・SVG 対応）"></textarea>
     </aside>
     <div class="preview-scroll" id="preview-scroll">
       <div id="preview" class="empty-preview">
         <p id="hint-recent" hidden></p>
         <p><b>画像付きの md を見る</b> — 「フォルダを開く（画像付き）」で、画像（例 <code>outputs/</code>）も含む親フォルダを選択してください（フォルダをウィンドウにドロップでも可・確認ダイアログなし）。左の一覧から md を選び、「全文検索」タブで本文を横断検索、右の目次で見出しへジャンプ。</p>
-        <p><b>markdown テキストを直接見る</b> — 「ペースト」ボタン、またはこのページ上で Ctrl+V。</p>
+        <p><b>Claude Code の出力・markdown テキストを直接見る</b> — 「ペースト」ボタン、またはこのページ上で Ctrl+V。ターミナルからコピーした Claude Code の出力は折り返し・マーカーを整形して表示。</p>
         <p><b>表示の調整</b> — 「表示」メニューで文字サイズ・行間・本文の幅・フォント（ゴシック/明朝）・ダークテーマ。対訳ノートは「訳文のみ」で原文引用を畳めます。図はクリックで拡大。</p>
         <p class="hint-foot">数式 (KaTeX)・mermaid 図・インライン SVG・相対パス画像に対応。すべてブラウザ内で処理され、外部に送信されることはありません。</p>
       </div>
@@ -5135,8 +5184,287 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     btnToc.addEventListener('click', () => mainEl.classList.toggle('no-toc'));
     btnSrc.addEventListener('click', () => btnSrc.classList.toggle('on', previewEl.classList.toggle('no-src')));
 
+    // ===== paste cleanup: Claude Code terminal output =====
+    // The paste pane exists mainly to read text copied out of the Claude Code
+    // terminal. Such a copy is not markdown: Ink (Claude Code's renderer) has
+    // hard-wrapped every line at the terminal width, every turn carries a
+    // marker (⏺ reply / tool call, ⎿ tool result, > prompt), and UI chrome
+    // (frames, spinners, footers) is mixed in. cleanupTerminalPaste() turns
+    // that back into readable markdown. Every step is optional (pasteOpts) and
+    // the textarea keeps the raw text, so nothing is lost.
+
+    // -- display width in terminal columns (CJK / emoji = 2) --
+    function ccIsWide(cp) {
+      return (cp >= 0x1100 && cp <= 0x115f) || (cp >= 0x2e80 && cp <= 0xa4cf) ||
+        (cp >= 0xac00 && cp <= 0xd7a3) || (cp >= 0xf900 && cp <= 0xfaff) ||
+        (cp >= 0xfe30 && cp <= 0xfe4f) || (cp >= 0xff00 && cp <= 0xff60) ||
+        (cp >= 0xffe0 && cp <= 0xffe6) || (cp >= 0x1f300 && cp <= 0x1faff) ||
+        (cp >= 0x20000 && cp <= 0x3fffd);
+    }
+    function ccIsCJK(ch) { return !!ch && ccIsWide(ch.codePointAt(0)); }
+    function ccWidth(s) {
+      let w = 0;
+      for (const ch of s) {
+        const cp = ch.codePointAt(0);
+        if (cp === 9) w += 4;
+        else if (cp < 32 || (cp >= 0x300 && cp <= 0x36f) || cp === 0x200b || cp === 0xfe0f) continue;
+        else w += ccIsWide(cp) ? 2 : 1;
+      }
+      return w;
+    }
+
+    // Lines that begin a new block are never glued onto the previous line.
+    const CC_BLOCK_START = /^\s*(?:[-*+•]\s|\d+[.)]\s|#{1,6}\s|>\s?|\||```|~~~|[│┃║┌┏╔╭└┗╚╰├┣╠╞─━═⎿⏺●✻✽✶✳∴❯]|$)/;
+    // Column where a line's own text starts (after indent + marker / bullet).
+    function ccContentCol(line) {
+      return line.match(/^\s*(?:[-*+•]\s+|\d+[.)]\s+|[⏺●⎿>❯]\s+)?/)[0].length;
+    }
+
+    // Undo terminal hard-wrapping. wrap-ansi (which Ink uses, trim:false hard:true)
+    // moves a space-delimited word to the next row when it does not fit and breaks
+    // an over-long word (= a CJK run) per character. So a line break is a wrap iff
+    // the first word of the next row would NOT have fit on this row at the
+    // terminal width W — otherwise wrap-ansi would have kept it on this row.
+    function unwrapTerminal(text, W) {
+      const lines = text.split('\n');
+      if (!W) { W = 0; for (const l of lines) W = Math.max(W, ccWidth(l.replace(/\s+$/, ''))); }
+      if (W < 40) return text; // not a terminal paste; leave alone
+      const out = [];
+      let inFence = false;
+      let resultCol = 0; // > 0 while inside a ⎿ tool result (its lines stay as shown)
+      for (let i = 0; i < lines.length; i++) {
+        let cur = lines[i];
+        if (/^\s*(```|~~~)/.test(cur)) { inFence = !inFence; out.push(cur); continue; }
+        if (inFence) { out.push(cur); continue; }
+        // Tool output is code-like (one record per line), where a nearly full
+        // line followed by another line is normal — never rejoin it. Only the
+        // prose parts (replies, prompts, tool-call lines, thinking) are unwrapped.
+        if (resultCol) {
+          if (!cur.trim() || cur.match(/^\s*/)[0].length >= resultCol) { out.push(cur); continue; }
+          resultCol = 0;
+        }
+        const rm = /^\s*⎿\s*/.exec(cur);
+        if (rm) { resultCol = rm[0].length; out.push(cur); continue; }
+        const contentCol = ccContentCol(cur);
+        let row = cur; // the terminal row most recently appended (the fit test is per row)
+        while (i + 1 < lines.length) {
+          const nxt = lines[i + 1];
+          if (CC_BLOCK_START.test(nxt)) break;
+          const nIndent = nxt.match(/^\s*/)[0].length;
+          if (nIndent < contentCol) break;                    // dedented → not a continuation
+          const body = nxt.slice(contentCol);                 // keeps an extra leading space (exact-fit quirk)
+          const unit = (body.match(/^\s*(\S+)/) || [])[1];
+          if (!unit) break;
+          const rowT = row.replace(/\s+$/, '');
+          const rowW = ccWidth(rowT);
+          if (rowW + 1 + ccWidth(unit) <= W) break;           // it would have fit → a real line break
+          // Wrap confirmed. Does a space belong at the seam?
+          let sep = ' ';
+          if (/\s$/.test(row) || /^\s/.test(body)) sep = '';  // the space survived on one side
+          else {
+            const last = Array.from(rowT).pop(), first = Array.from(body)[0];
+            const full = rowW >= W - 1;                       // row filled by a per-character break?
+            if (full && (ccIsCJK(last) || ccIsCJK(first))) sep = '';
+            else if (full && /[\/:]/.test(rowT.split(' ').pop()) && !/^[A-Za-z][a-z]*[,.;:!?)]*$/.test(unit)) sep = ''; // URL / path split mid-token
+          }
+          cur = (sep === '' && /\s$/.test(cur) ? cur : cur.replace(/\s+$/, '')) + sep + body;
+          row = nxt;
+          i++;
+        }
+        out.push(cur);
+      }
+      return out.join('\n');
+    }
+
+    // UI chrome that is not content.
+    const CC_NOISE = [
+      /^\s*[╭╰╮╯┌┐└┘─━═┄┈╌]+\s*$/,                          // frame edges / separators
+      /^\s*[│┃║](\s.*)?[│┃║]\s*$/,                          // framed line (welcome banner, old input box)
+      /^\s*[✻✽✶✳✢·∴*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]\s*\S+…(\s|$)/,            // spinner: "✻ Cogitating… (esc to interrupt)"
+      /^\s*\? for shortcuts/, /^\s*⏵⏵ /, /^\s*Context left until auto-compact/,
+      /^\s*[>❯]\s*$/,                                        // empty prompt line
+      /^\s*※ Tip:/,
+    ];
+    const CC_THINKING = /^\s*[✻✽✶✳∴·*]?\s*Thinking…?\s*$/;
+
+    // Inside a reply: box-drawn tables → markdown tables, rules → ---, frames dropped.
+    function ccReplyLines(body) {
+      const out = [];
+      const blankBefore = () => { if (out.length && out[out.length - 1].trim()) out.push(''); };
+      let tableStart = -1, sawSep = false;
+      // GFM needs a header separator and blank lines around a table (a following
+      // text line would otherwise be swallowed as a row).
+      const endTable = (next) => {
+        if (tableStart >= 0) {
+          if (!sawSep) {
+            const cols = (out[tableStart].match(/\|/g) || []).length - 1;
+            out.splice(tableStart + 1, 0, '|' + ' --- |'.repeat(Math.max(1, cols)));
+          }
+          if (next !== undefined && next.trim()) out.push('');
+        }
+        tableStart = -1; sawSep = false;
+      };
+      for (const l of body) {
+        if (/^\s*[┌┏╔╭][─━═┬┳╦]*[┐┓╗╮]\s*$/.test(l) || /^\s*[└┗╚╰][─━═┴┻╩]*[┘┛╝╯]\s*$/.test(l)) continue;
+        const sep = /^\s*[├┣╠╞][─━═┼╪┿╋]*[┤┫╣╡]\s*$/.test(l);
+        const row = /^\s*[│┃║](.*[│┃║].*)[│┃║]\s*$/.exec(l);   // ≥ 1 interior separator = a table row
+        if (sep && tableStart >= 0) {
+          if (!sawSep) { const cols = (out[out.length - 1].match(/\|/g) || []).length - 1; out.push('|' + ' --- |'.repeat(Math.max(1, cols))); sawSep = true; }
+          continue;
+        }
+        if (row) {
+          if (tableStart < 0) { blankBefore(); tableStart = out.length; sawSep = false; }
+          out.push('| ' + row[1].split(/[│┃║]/).map((c) => c.trim().replace(/\|/g, '\\|')).join(' | ') + ' |');
+          continue;
+        }
+        endTable(l);
+        if (/^\s*[─━═]{3,}\s*$/.test(l)) { blankBefore(); out.push('---'); continue; } // rule (never a setext underline)
+        if (/^\s*[│┃║](\s.*)?[│┃║]\s*$/.test(l)) continue;      // framed non-table line = chrome
+        out.push(l);
+      }
+      endTable();
+      return out;
+    }
+
+    // Turn the (unwrapped) transcript lines into markdown.
+    // toolMode: 'fold' (details, closed) | 'open' (details, expanded) | 'drop'
+    function ccStructure(lines, toolMode) {
+      const out = [];
+      const isBlank = (l) => !l.trim();
+      const indentOf = (l) => l.match(/^\s*/)[0].length;
+      const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      const stripHint = (s) => s.replace(/\s*\((?:ctrl\+[eor]|shift\+↓) to expand\)/g, '');
+      const fenceFor = (body) => { let n = 3; for (const m of body.matchAll(/`{3,}/g)) n = Math.max(n, m[0].length + 1); return '`'.repeat(n); };
+      const blank = () => { if (out.length && out[out.length - 1] !== '') out.push(''); };
+      let i = 0;
+      // Consume the lines indented ≥ col (blank lines included), stopping before the
+      // first shallower non-blank line; returns them dedented, trailing blanks handed back.
+      const takeBlock = (col) => {
+        const acc = [];
+        while (i < lines.length && (isBlank(lines[i]) || indentOf(lines[i]) >= col)) {
+          acc.push(isBlank(lines[i]) ? '' : lines[i].slice(col));
+          i++;
+        }
+        while (acc.length && acc[acc.length - 1] === '') { acc.pop(); i--; }
+        return acc;
+      };
+      const emitFold = (cls, summary, bodyLines, asCode) => {
+        blank();
+        out.push('<details class="' + cls + '"' + (toolMode === 'open' ? ' open' : '') + '><summary>' + summary + '</summary>', '');
+        if (bodyLines.length) {
+          if (asCode) { const f = fenceFor(bodyLines.join('\n')); out.push(f, ...bodyLines, f, ''); }
+          else out.push(...bodyLines, '');
+        }
+        out.push('</details>');
+        blank();
+      };
+      const emitTool = (title, results) => {
+        if (toolMode === 'drop') return;
+        const first = results.length && results[0].length ? results[0][0].trim() : '';
+        const flat = results.length === 1 && results[0].length <= 1 ? [] : results.flatMap((r, k) => (k ? ['', ...r] : r));
+        let summary = '<code>' + esc(title) + '</code>';
+        if (first) summary += ' <span class="cc-res">' + esc(first.length > 100 ? first.slice(0, 100) + '…' : first) + '</span>';
+        emitFold('cc-tool', summary, flat, true);
+      };
+      while (i < lines.length) {
+        const ln = lines[i];
+        if (isBlank(ln)) { i++; continue; }
+        let m = /^[⏺●]\s+(.*)$/.exec(ln);
+        if (m) {
+          // Tool call if a ⎿ result follows; otherwise a reply.
+          let j = i + 1;
+          while (j < lines.length && isBlank(lines[j])) j++;
+          if (j < lines.length && /^\s*⎿/.test(lines[j])) {
+            i = j;
+            const results = [];
+            while (i < lines.length) {
+              const rm = /^\s*⎿\s*/.exec(lines[i]);
+              if (!rm) break;
+              const col = rm[0].length;
+              const first = lines[i].slice(col);
+              i++;
+              results.push([first, ...takeBlock(col)].map(stripHint));
+              let k = i;
+              while (k < lines.length && isBlank(lines[k])) k++;
+              if (k < lines.length && /^\s*⎿/.test(lines[k])) { i = k; continue; }
+              break;
+            }
+            emitTool(m[1].trim(), results);
+            continue;
+          }
+          i++;
+          blank(); out.push(...ccReplyLines([m[1], ...takeBlock(2)])); blank();
+          continue;
+        }
+        m = /^[>❯]\s(.*)$/.exec(ln);
+        if (m) {
+          i++;
+          const body = [m[1], ...takeBlock(2)];
+          blank(); out.push(...body.map((l) => (l ? '> ' + l : '>'))); blank();
+          continue;
+        }
+        if (CC_THINKING.test(ln)) {
+          i++;
+          let j = i;
+          while (j < lines.length && isBlank(lines[j])) j++;
+          const col = j < lines.length ? indentOf(lines[j]) : 0;
+          const body = col > 0 ? takeBlock(col) : [];
+          if (toolMode !== 'drop') emitFold('cc-thinking', 'Thinking…', ccReplyLines(body), false);
+          continue;
+        }
+        m = /^\s*⎿\s*/.exec(ln);
+        if (m) { // result without its call (copy started mid-block)
+          const col = m[0].length;
+          i++;
+          emitTool('', [[ln.slice(col), ...takeBlock(col)].map(stripHint)]);
+          continue;
+        }
+        if (CC_NOISE.some((re) => re.test(ln))) { i++; continue; }
+        if (indentOf(ln) >= 2) { // indented text with no marker (copy started mid-reply)
+          blank(); out.push(...ccReplyLines(takeBlock(2))); blank();
+          continue;
+        }
+        out.push(ln); i++;
+      }
+      while (out.length && out[0] === '') out.shift();
+      while (out.length && out[out.length - 1] === '') out.pop();
+      return out;
+    }
+
+    function looksLikeClaudeCode(lines) {
+      return lines.some((l) => /^[⏺●]\s|^\s{0,4}⎿\s/.test(l));
+    }
+
+    // opts: { unwrap: bool, cc: bool, tools: 'fold' | 'open' | 'drop' }
+    function cleanupTerminalPaste(raw, opts) {
+      let text = raw.replace(/\r\n?/g, '\n');
+      const lines = text.split('\n');
+      const isCC = looksLikeClaudeCode(lines);
+      let W = 0;
+      for (const l of lines) W = Math.max(W, ccWidth(l.replace(/\s+$/, '')));
+      if (opts.unwrap) text = unwrapTerminal(text, W);
+      if (opts.cc && isCC) {
+        text = ccStructure(text.split('\n'), opts.tools || 'fold').join('\n');
+        text = text.replace(/[ \t]+$/gm, '').replace(/\n{3,}/g, '\n\n');
+      }
+      return text;
+    }
+    // ===== /paste cleanup =====
+
+    // -- paste options (persisted) --
+    const PASTE_OPTS_KEY = 'mdv-paste-opts';
+    const PASTE_OPTS_DEFAULTS = { unwrap: true, cc: true, tools: 'fold' };
+    let pasteOpts = { ...PASTE_OPTS_DEFAULTS };
+    try { Object.assign(pasteOpts, JSON.parse(localStorage.getItem(PASTE_OPTS_KEY) || '{}')); } catch { /* ignore */ }
+    if (!['fold', 'open', 'drop'].includes(pasteOpts.tools)) pasteOpts.tools = 'fold';
+    // What actually gets rendered / saved for the current textarea content.
+    function preparePasteText(raw) {
+      try { return cleanupTerminalPaste(raw, pasteOpts); } catch (e) { console.warn('paste cleanup failed:', e); return raw; }
+    }
+
     // ===== paste mode =====
-    // Paste arbitrary markdown text and preview it live. The draft survives
+    // Paste text (typically Claude Code terminal output, or markdown) and preview
+    // it live — see cleanupTerminalPaste above. The draft survives
     // reloads via localStorage. Pasting anywhere outside an input (Ctrl+V on
     // the page) opens the pane with the clipboard text.
     const btnPaste = document.getElementById('btn-paste');
@@ -5213,7 +5541,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         return;
       }
       setStatus(null);
-      await renderText(text);
+      await renderText(preparePasteText(text));
     }
 
     function schedulePasteRender() {
@@ -5233,8 +5561,9 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       }
     });
 
-    function pasteSuggestName() {
-      const m = pasteInput.value.match(/^\s{0,3}#{1,6}\s+(.+?)\s*$/m);
+    function pasteSuggestName(text) {
+      // first heading, else the first prompt line (Claude Code transcript)
+      const m = text.match(/^\s{0,3}#{1,6}\s+(.+?)\s*$/m) || text.match(/^>\s+(.+?)\s*$/m);
       if (!m) return 'untitled.md';
       const slug = m[1].replace(/[*_`]/g, '').trim()
         .replace(/[\\/:*?"<>|]+/g, '').replace(/\s+/g, '_').slice(0, 60);
@@ -5242,9 +5571,10 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     }
 
     pasteSaveBtn.addEventListener('click', async () => {
-      const text = pasteInput.value;
+      // save what is on screen (the cleaned-up text), not the raw terminal copy
+      const text = preparePasteText(pasteInput.value);
       if (!text.trim()) { setStatus('保存する内容がありません', true); return; }
-      const name = pasteSuggestName();
+      const name = pasteSuggestName(text);
       // Chrome treats file:// as a secure context, so showSaveFilePicker works;
       // other browsers fall back to a plain download.
       if (window.showSaveFilePicker) {
@@ -5279,6 +5609,29 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       try { localStorage.removeItem(PASTE_DRAFT_KEY); } catch { /* ignore */ }
       renderPasteNow();
     });
+
+    // options row: reflect state, persist, re-render
+    const pasteOptsEl = document.getElementById('paste-opts');
+    const poUnwrap = document.getElementById('po-unwrap');
+    const poCC = document.getElementById('po-cc');
+    const poTools = document.getElementById('po-tools');
+    function applyPasteOpts(rerender) {
+      poUnwrap.checked = !!pasteOpts.unwrap;
+      poCC.checked = !!pasteOpts.cc;
+      pasteOptsEl.classList.toggle('cc-off', !pasteOpts.cc);
+      poTools.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.val === pasteOpts.tools));
+      try { localStorage.setItem(PASTE_OPTS_KEY, JSON.stringify(pasteOpts)); } catch { /* quota */ }
+      if (rerender && pasteModeOn()) renderPasteNow();
+    }
+    poUnwrap.addEventListener('change', () => { pasteOpts.unwrap = poUnwrap.checked; applyPasteOpts(true); });
+    poCC.addEventListener('change', () => { pasteOpts.cc = poCC.checked; applyPasteOpts(true); });
+    poTools.addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-val]');
+      if (!b) return;
+      pasteOpts.tools = b.dataset.val;
+      applyPasteOpts(true);
+    });
+    applyPasteOpts(false);
 
     // Ctrl+V anywhere outside an input → open paste mode with the clipboard text
     window.addEventListener('paste', (e) => {
