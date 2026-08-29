@@ -330,7 +330,7 @@
     #preview.empty-preview #hint-recent .reopen-btn { display: inline-block; margin: 0; font-size: 13px; padding: 6px 12px; }
 
     /* ===== paste pane ===== */
-    #paste-pane {
+    #paste-pane, #edit-pane {
       width: 42%;
       flex: none;
       display: none;
@@ -340,6 +340,7 @@
       min-width: 0;
     }
     #main.paste-on #paste-pane { display: flex; }
+    #main.edit-on #edit-pane { display: flex; }
     .paste-tools {
       display: flex;
       align-items: center;
@@ -359,7 +360,7 @@
     }
     .paste-tools button:hover { background: var(--accent-soft); }
     .paste-hint { font-size: 11px; color: var(--muted); }
-    #paste-input {
+    #paste-input, #edit-input {
       flex: 1;
       border: none;
       outline: none;
@@ -384,6 +385,43 @@
     }
     .paste-opts label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
     .paste-opts input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
+    /* サーバモード（serve.py）: 編集ペインの通知行、ヘッダのバッジ、ヒントのルートボタン */
+    .edit-notice {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px 10px;
+      padding: 6px 10px;
+      border-bottom: 1px solid var(--error-border);
+      background: var(--error-bg);
+      color: var(--error-fg);
+      font-size: 12px;
+    }
+    .edit-notice[hidden] { display: none; }
+    .edit-notice button {
+      padding: 3px 10px;
+      font-size: 12px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--fg);
+      cursor: pointer;
+    }
+    .edit-notice button:hover { background: var(--accent-soft); }
+    #edit-hint.dirty { color: var(--error-fg); font-weight: 600; }
+    #edit-input { tab-size: 4; }
+    .srv-badge {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      white-space: nowrap;
+      background: var(--accent-soft-2);
+      color: var(--fg-2);
+      border: 1px solid var(--accent);
+    }
+    .tb[hidden], .srv-badge[hidden] { display: none; }
+    #preview.empty-preview #hint-srv { margin-bottom: 1.2em; }
+    #preview.empty-preview #hint-srv .reopen-btn { display: inline-block; margin: 0 6px 4px 0; font-size: 13px; padding: 6px 12px; }
 
     #toc {
       width: 230px;
@@ -637,7 +675,7 @@
       }
       #sidebar { left: 0; width: min(300px, 85vw); }
       #toc { right: 0; width: min(260px, 80vw); }
-      #paste-pane { width: 50%; }
+      #paste-pane, #edit-pane { width: 50%; }
       .preview-scroll { padding: 16px 16px 40px; }
       header { padding: 6px 10px; gap: 6px; }
       .tb { padding: 5px 9px; font-size: 12px; }
@@ -660,7 +698,7 @@
         overflow: visible;
       }
       body { display: block; }
-      header, #status, .drop-overlay, #sidebar, #toc, #paste-pane, .lightbox { display: none !important; }
+      header, #status, .drop-overlay, #sidebar, #toc, #paste-pane, #edit-pane, .lightbox { display: none !important; }
       #main { display: block; }
       .preview-scroll {
         overflow: visible;
@@ -4110,6 +4148,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     <span class="sep"></span>
     <button id="btn-src" class="tb secondary" title="対訳ノートの原文引用を畳んで訳文だけを読む">訳文のみ</button>
     <button id="btn-paste" class="tb secondary" title="markdown を貼り付けてプレビュー（ページ上のどこでも Ctrl+V で開く）">ペースト</button>
+    <button id="btn-edit" class="tb secondary" title="このファイルを編集（Ctrl+E。保存は Ctrl+S）— サーバモードのみ" hidden disabled>編集</button>
+    <button id="btn-code" class="tb secondary" title="このファイルを VS Code で開く — サーバモードのみ" hidden disabled>VS Code</button>
     <span class="menu-wrap">
       <button id="btn-view" class="tb secondary" title="文字サイズ・行間・幅・フォント・テーマ" aria-haspopup="true" aria-expanded="false">表示 ▾</button>
       <div id="view-menu" class="popover" hidden>
@@ -4162,6 +4202,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     </span>
     <span class="sep"></span>
     <button id="btn-reload" class="tb secondary" disabled>再読み込み</button>
+    <span id="srv-badge" class="srv-badge" hidden>サーバ</span>
     <span id="file-name">（ファイル未選択）</span>
   </header>
   <div id="status" class="status hidden"></div>
@@ -4188,9 +4229,19 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       </div>
       <textarea id="paste-input" spellcheck="false" placeholder="ここに貼り付け（Claude Code のターミナル出力 / markdown。KaTeX・mermaid・表・SVG 対応）"></textarea>
     </aside>
+    <aside id="edit-pane">
+      <div class="paste-tools">
+        <button id="edit-save" title="ディスクに保存（Ctrl+S）">保存</button>
+        <button id="edit-reload" title="ディスクの内容で編集欄を置き換える（Ctrl+R）">ディスクから読み直す</button>
+        <span class="paste-hint" id="edit-hint"></span>
+      </div>
+      <div class="edit-notice" id="edit-notice" hidden></div>
+      <textarea id="edit-input" spellcheck="false" placeholder="（読み込み中…）"></textarea>
+    </aside>
     <div class="preview-scroll" id="preview-scroll">
       <div id="preview" class="empty-preview">
         <p id="hint-recent" hidden></p>
+        <p id="hint-srv" hidden></p>
         <p><b>画像付きの md を見る</b> — 「フォルダを開く（画像付き）」で、画像（例 <code>outputs/</code>）も含む親フォルダを選択してください（フォルダをウィンドウにドロップでも可・確認ダイアログなし）。左の一覧から md を選び、「全文検索」タブで本文を横断検索、右の目次で見出しへジャンプ。</p>
         <p><b>Claude Code の出力・markdown テキストを直接見る</b> — 「ペースト」ボタン、またはこのページ上で Ctrl+V。ターミナルからコピーした出力は端末幅の折り返しを戻して表示。</p>
         <p><b>表示の調整</b> — 「表示」メニューで文字サイズ・行間・本文の幅・フォント（ゴシック/明朝）・ダークテーマ。対訳ノートは「訳文のみ」で原文引用を畳めます。図はクリックで拡大。</p>
@@ -4304,6 +4355,18 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     let currentFile = null;
     let currentHandle = null; // FileSystemFileHandle (if File System Access API available)
 
+    // server mode (serve.py) — state and elements; the code lives in the "server mode" section below
+    const SRV = { on: false, root: null, rootExplicit: false, roots: [], version: '', truncated: false, imgGen: 0 };
+    let edit = null; // { path, rel, base: { text, sha, mtimeNs } } while the edit pane is open
+    const srvBadge = document.getElementById('srv-badge');
+    const btnEdit = document.getElementById('btn-edit');
+    const btnCode = document.getElementById('btn-code');
+    const editInput = document.getElementById('edit-input');
+    const editSaveBtn = document.getElementById('edit-save');
+    const editReloadBtn = document.getElementById('edit-reload');
+    const editHint = document.getElementById('edit-hint');
+    const editNoticeEl = document.getElementById('edit-notice');
+
     // ----- remember where we were: last folder / file handles live in IndexedDB -----
     // (FileSystemHandles can be structured-cloned into IndexedDB and survive reloads.)
     // They make the pickers start in the previous location (startIn) and let the user
@@ -4346,6 +4409,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     function setFileName(s) {
       fileNameEl.textContent = s;
       fileNameEl.title = s; // full path on hover (the label is ellipsized)
+      srvUpdateButtons();
     }
 
     // ===== folder mode (index + image resolution + full-text search) =====
@@ -4425,6 +4489,11 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     async function refreshMd(m, force) {
       if (!m.handle) return false;
       try {
+        // server mode, right after a listing: its mtime tells whether a fetch is needed at all
+        if (!force && m.handle.fresh) {
+          m.handle.fresh = false;
+          if (m.handle.listedMtime === m.mtime && mdTexts.has(m.rel)) return false;
+        }
         const f = await m.handle.getFile();
         if (!force && f.lastModified === m.mtime && mdTexts.has(m.rel)) return false;
         m.file = f;
@@ -4438,7 +4507,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     }
 
     // list: [{ rel, file?, handle? }]; roots: directory handles the list came from (if any)
-    async function indexFiles(list, roots = []) {
+    async function indexFiles(list, roots = [], preferRel = null) {
       fileIndex = new Map();
       mdFiles = [];
       mdTexts = new Map();
@@ -4465,11 +4534,26 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       renderFileList();
       let last = null;
       try { last = localStorage.getItem(LAST_MD_KEY); } catch { /* ignore */ }
+      if (preferRel && mdFiles.some((m) => m.rel === preferRel)) last = preferRel;
       selectMd(last && mdFiles.some((m) => m.rel === last) ? last : mdFiles[0].rel);
     }
 
     // Walk a FileSystemDirectoryHandle recursively into [{ rel, handle }].
     async function walkDirHandle(dir, prefix, out) {
+      if (dir.kind === 'server-dir') { // server mode: one listing request instead of a walk
+        const withTexts = dir.texts; // md texts ride along on the first listing only
+        dir.texts = false;
+        let res;
+        try {
+          res = await (await srvFetch('/api/list?root=' + encodeURIComponent(dir.path) + (withTexts ? '&texts=1' : ''))).json();
+        } catch (e) {
+          setStatus(`一覧を取得できません: ${e.message}`, true);
+          return;
+        }
+        for (const f of res.files) out.push({ rel: prefix + f.rel, handle: srvFile(dir.path + '/' + f.rel, f) });
+        if (res.truncated) SRV.truncated = true;
+        return;
+      }
       let it;
       try { it = dir.entries(); } catch { return; }
       try {
@@ -4483,7 +4567,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         }
       } catch { /* unreadable dir: skip */ }
     }
-    async function indexDirHandles(dirs, extraFiles = []) {
+    async function indexDirHandles(dirs, extraFiles = [], preferRel = null) {
       setStatus('フォルダを読み込み中…');
       const out = extraFiles.slice();
       const roots = [];
@@ -4492,7 +4576,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         await walkDirHandle(d, prefix, out);
         roots.push({ handle: d, prefix });
       }
-      await indexFiles(out, roots);
+      await indexFiles(out, roots, preferRel);
     }
     // Re-walk the opened folder(s): pick up new / deleted md files, re-read changed ones.
     // Only possible when the folder was opened with handles.
@@ -4602,6 +4686,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       const b = makeReopenButton();
       el.hidden = !b;
       if (b) el.appendChild(b);
+      fillHintSrv();
     }
     async function reopenLastDir() {
       const h = lastDirHandle;
@@ -4775,6 +4860,25 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       objectUrls = [];
       const imgs = Array.from(previewEl.querySelectorAll('img'));
       const missing = [];
+      const srvCur = srvCurrentEntry();
+      if (srvCur) {
+        // server mode: point <img> straight at the server — lazy and parallel, and a
+        // ../ path outside the listed folder still resolves while it stays inside an
+        // allowed root. imgGen changes on 再読み込み so a re-generated figure is refetched.
+        const dir = dirOf(srvCur.handle.path);
+        for (const img of imgs) {
+          const raw = img.getAttribute('src') || '';
+          if (/^(https?:|data:|blob:|file:|\/\/)/i.test(raw)) continue;
+          let rel;
+          try { rel = decodeURIComponent(raw); } catch { rel = raw; }
+          img.addEventListener('error', () => {
+            missing.push(raw);
+            setStatus(`画像が見つかりません (${missing.length}件): ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ' …' : ''}`, true);
+          }, { once: true });
+          img.src = srvFileUrl(dir + '/' + rel) + '&g=' + SRV.imgGen;
+        }
+        return;
+      }
       for (const img of imgs) {
         const raw = img.getAttribute('src') || '';
         if (/^(https?:|data:|blob:|file:|\/\/)/i.test(raw)) continue; // already absolute
@@ -4980,6 +5084,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     async function selectMd(rel) {
       const entry = mdFiles.find((m) => m.rel === rel);
       if (!entry) return;
+      if (edit && rel !== edit.rel && !leaveEdit(false, false)) return; // switching files while editing: ask first
       if (pasteModeOn()) setPasteMode(false);
       currentFile = entry.file;
       currentHandle = null;
@@ -4989,6 +5094,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       setFileName(entry.rel);
       reloadBtn.disabled = false;
       document.title = `${baseOf(entry.rel)} — Markdown Viewer`;
+      srvAfterSelect(entry);
       try {
         // pick up edits made since the folder was indexed (handle-backed entries only)
         if (await refreshMd(entry, false)) refreshSidebar();
@@ -5026,6 +5132,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       + '（Chrome では「フォルダを開く」「.md 単体を開く」またはドラッグ＆ドロップで開いたものは再読み込みできます）';
 
     async function reload() {
+      SRV.imgGen++; // server mode: images are refetched on the next render
+      if (editModeOn()) { await editReloadFromDisk(); return; }
       const keepScroll = previewScroll.scrollTop; // stay where you were reading
       if (currentMdRel) { // folder mode: re-read from disk + refresh cache
         const entry = mdFiles.find((m) => m.rel === currentMdRel);
@@ -5332,6 +5440,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     }
 
     function setPasteMode(on) {
+      if (on && editModeOn() && !leaveEdit(false, false)) return; // unsaved edits: ask first
       // Remember the current document on the off -> on transition so the
       // toggle button can bring it back on exit.
       if (on && !pasteModeOn()) {
@@ -5639,8 +5748,317 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       }
     });
 
-    // Keyboard: Ctrl+R / F5 → reload current file (without reloading the page)
+    // ===== server mode (serve.py) =====
+    // Served over http://localhost by serve.py, the page can open a file by path
+    // (?path=<absolute path>), list/search the folder around it, show its images and
+    // edit + save it — all through /api/*. Every server-side file is wrapped in a
+    // handle object shaped like a FileSystemFileHandle ({ kind, name, getFile() }),
+    // so the folder-mode code above (readMdText / refreshMd / reload / reindexFolder)
+    // works unchanged. Nothing in here runs on file:// or on GitHub Pages.
+    function srvFileUrl(path) { return '/api/file?path=' + encodeURIComponent(path); }
+    function encPath(p) { return encodeURIComponent(p).replace(/%2F/gi, '/'); } // keeps ?path= readable
+    async function srvErrText(r) {
+      try { const j = await r.json(); if (j && j.error) return j.error; } catch { /* not json */ }
+      return `${r.status} ${r.statusText}`;
+    }
+    async function srvFetch(url, opts) {
+      const r = await fetch(url, { cache: 'no-store', ...(opts || {}) });
+      if (!r.ok) throw new Error(await srvErrText(r));
+      return r;
+    }
+    // A file on the server, shaped like a FileSystemFileHandle.
+    function srvFile(path, listed) {
+      const name = baseOf(path);
+      const mtimeMs = listed ? Math.floor(Number(listed.mtime_ns) / 1e6) : 0;
+      const h = {
+        kind: 'file', srv: true, name, path,
+        fresh: !!listed, listedMtime: mtimeMs, // fresh listing: refreshMd may trust listedMtime once
+        pre: listed && typeof listed.text === 'string' ? listed.text : null, // text bundled with the listing
+        async getFile() {
+          if (h.pre != null) { // one-shot: the text came with the listing, no round trip
+            const f = new File([h.pre], name, { type: 'text/markdown', lastModified: mtimeMs });
+            h.pre = null;
+            return f;
+          }
+          const r = await srvFetch(srvFileUrl(path));
+          const ns = r.headers.get('X-Mtime-Ns') || '0';
+          const blob = await r.blob();
+          return new File([blob], name, { type: blob.type, lastModified: Math.floor(Number(ns) / 1e6) });
+        },
+      };
+      return h;
+    }
+    function srvDir(root) {
+      return { kind: 'server-dir', srv: true, name: baseOf(root) || root, path: root, texts: true };
+    }
+    // The md on screen, if it is server-backed (null in single-file / paste / FSA modes).
+    function srvCurrentEntry() {
+      if (!SRV.on || !currentMdRel) return null;
+      const m = mdFiles.find((x) => x.rel === currentMdRel);
+      return m && m.handle && m.handle.srv ? m : null;
+    }
+    function srvUpdateButtons() {
+      if (!SRV.on) return;
+      const cur = srvCurrentEntry();
+      btnEdit.disabled = !cur;
+      btnCode.disabled = !cur;
+    }
+    function srvAfterSelect(entry) {
+      if (!SRV.on || !entry.handle || !entry.handle.srv) return;
+      // keep the URL in sync so F5 / bookmarks reopen this file
+      const u = '?path=' + encPath(entry.handle.path) + (SRV.rootExplicit ? '&root=' + encPath(SRV.root) : '') + location.hash;
+      try { history.replaceState(null, '', u); } catch { /* ignore */ }
+    }
+    function fillHintSrv() {
+      const el = document.getElementById('hint-srv');
+      if (!el) return;
+      el.innerHTML = '';
+      el.hidden = !SRV.on;
+      if (!SRV.on) return;
+      el.appendChild(document.createTextNode('サーバモード — フォルダを開く: '));
+      for (const r of SRV.roots) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'reopen-btn';
+        b.textContent = r;
+        b.addEventListener('click', () => srvOpenRoot(r, null, true));
+        el.appendChild(b);
+      }
+    }
+    async function srvOpenRoot(root, rel, explicit) {
+      const dir = srvDir(root);
+      SRV.root = root;
+      SRV.rootExplicit = !!explicit;
+      SRV.truncated = false;
+      await indexDirHandles([dir], [], rel ? dir.name + '/' + rel : null);
+      if (SRV.truncated) setStatus(`ファイルが多すぎるため一覧を途中で打ち切りました (${root}) — ?root= でフォルダを絞ってください`, true);
+    }
+    async function srvOpenPath(p, rootQ) {
+      let info;
+      try {
+        const r = await srvFetch('/api/resolve?path=' + encodeURIComponent(p) + (rootQ ? '&root=' + encodeURIComponent(rootQ) : ''));
+        info = await r.json();
+      } catch (e) {
+        setStatus(`開けません: ${e.message}`, true);
+        return;
+      }
+      await srvOpenRoot(info.root, info.rel, !!rootQ);
+    }
+    async function bootServerMode() {
+      if (location.protocol !== 'http:' || !/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return;
+      let st = null;
+      try {
+        const r = await fetch('/api/status', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
+        if (r.ok) st = await r.json();
+      } catch { /* not serve.py, or not running */ }
+      if (!st || !st.mdv) return;
+      SRV.on = true;
+      SRV.roots = st.roots || [];
+      SRV.version = st.version || '';
+      srvBadge.hidden = false;
+      srvBadge.title = `サーバモード (serve.py ${SRV.version})\n許可ルート: ${SRV.roots.join(', ')}`;
+      btnEdit.hidden = false;
+      btnCode.hidden = false;
+      srvUpdateButtons();
+      fillHintSrv();
+      const q = new URLSearchParams(location.search);
+      const p = q.get('path');
+      const root = q.get('root');
+      if (p) await srvOpenPath(p, root);
+      else if (root) await srvOpenRoot(root, null, true);
+    }
+
+    // ----- edit mode (server mode only): textarea on the left, live preview on the right -----
+    // Explicit save (Ctrl+S). The draft is mirrored into localStorage so a closed tab
+    // loses nothing; /api/save answers 409 when the file changed on disk meanwhile.
+    let editTimer = 0;
+    const EDIT_DRAFT_PREFIX = 'mdv-edit-draft:';
+    function editModeOn() { return mainEl.classList.contains('edit-on'); }
+    function editDirty() { return !!edit && editInput.value !== edit.base.text; }
+    function loadDraft(path) { try { return localStorage.getItem(EDIT_DRAFT_PREFIX + path); } catch { return null; } }
+    function saveDraft(path, text) { try { localStorage.setItem(EDIT_DRAFT_PREFIX + path, text); } catch { /* quota */ } }
+    function clearDraft(path) { try { localStorage.removeItem(EDIT_DRAFT_PREFIX + path); } catch { /* ignore */ } }
+    function editNotice(msg, actions) {
+      editNoticeEl.innerHTML = '';
+      editNoticeEl.hidden = !msg;
+      if (!msg) return;
+      const s = document.createElement('span');
+      s.textContent = msg;
+      editNoticeEl.appendChild(s);
+      for (const [label, fn] of actions || []) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.textContent = label;
+        b.addEventListener('click', () => { editNotice(null); fn(); });
+        editNoticeEl.appendChild(b);
+      }
+    }
+    function updateEditHint() {
+      const d = editDirty();
+      editHint.textContent = d ? '未保存の変更あり — Ctrl+S で保存' : '保存済み';
+      editHint.classList.toggle('dirty', d);
+      editSaveBtn.disabled = !d;
+    }
+    // The textarea normalizes CRLF to LF, so compare against LF text; serve.py restores
+    // the file's original line endings (and BOM) when saving.
+    function normEol(s) { return s.replace(/\r\n?/g, '\n'); }
+    async function fetchForEdit(path) {
+      const r = await srvFetch(srvFileUrl(path));
+      const meta = { mtimeNs: r.headers.get('X-Mtime-Ns') || '0', sha: r.headers.get('X-Sha256') || '' };
+      return { text: normEol(await r.text()), ...meta };
+    }
+    async function enterEdit() {
+      const cur = srvCurrentEntry();
+      if (!cur || editModeOn()) return;
+      let base;
+      try {
+        base = await fetchForEdit(cur.handle.path);
+      } catch (e) {
+        setStatus(`編集用に読み込めません: ${e.message}`, true);
+        return;
+      }
+      edit = { path: cur.handle.path, rel: cur.rel, base };
+      editInput.value = base.text;
+      mainEl.classList.add('edit-on');
+      btnEdit.classList.add('on');
+      editNotice(null);
+      if (base.text !== mdTexts.get(cur.rel)) { // the cache was stale: show what is being edited
+        mdTexts.set(cur.rel, base.text);
+        titleCache.delete(cur.rel);
+        await renderText(base.text);
+      }
+      const d = loadDraft(edit.path);
+      if (d != null && d !== base.text) {
+        editNotice('保存されていない下書きがあります。', [
+          ['下書きを開く', () => { editInput.value = d; scheduleEditRender(); }],
+          ['下書きを破棄', () => clearDraft(edit.path)],
+        ]);
+      }
+      updateEditHint();
+      srvUpdateButtons();
+      editInput.focus();
+    }
+    // Leave edit mode. Asks when there are unsaved changes; returns false if cancelled.
+    function leaveEdit(discard, reselect = true) {
+      if (!edit) return true;
+      if (editDirty() && !discard && !confirm('未保存の変更があります。破棄して編集を終了しますか？')) return false;
+      clearTimeout(editTimer);
+      clearDraft(edit.path);
+      const rel = edit.rel;
+      edit = null;
+      mainEl.classList.remove('edit-on');
+      btnEdit.classList.remove('on');
+      editNotice(null);
+      if (reselect && mdFiles.some((m) => m.rel === rel)) selectMd(rel); // back to the on-disk text
+      return true;
+    }
+    function scheduleEditRender() {
+      updateEditHint();
+      clearTimeout(editTimer);
+      editTimer = setTimeout(async () => {
+        if (!edit) return;
+        const text = editInput.value;
+        if (text !== edit.base.text) saveDraft(edit.path, text); else clearDraft(edit.path);
+        await renderText(text);
+      }, 300);
+    }
+    async function saveEdit(force) {
+      if (!edit) return;
+      const text = editInput.value;
+      const snapshot = edit;
+      let r;
+      try {
+        r = await fetch('/api/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: snapshot.path, text, base_sha256: snapshot.base.sha, base_mtime_ns: snapshot.base.mtimeNs, force: !!force }),
+        });
+      } catch (e) {
+        setStatus(`保存失敗: ${e.message}`, true);
+        return;
+      }
+      if (edit !== snapshot) return; // edit mode was left meanwhile
+      if (r.status === 409) {
+        const j = await r.json();
+        const disk = normEol(j.text);
+        editNotice('ディスク上のファイルが変更されています（Claude Code など）。', [
+          ['ディスク版を読み込む（今の編集は下書きに退避）', () => {
+            saveDraft(edit.path, text);
+            editInput.value = disk;
+            edit.base = { text: disk, sha: j.sha256, mtimeNs: j.mtime_ns };
+            updateEditHint();
+            renderText(disk);
+            editNotice('あなたの編集は下書きに退避しました。', [['退避した編集を開く', () => { editInput.value = text; scheduleEditRender(); }]]);
+          }],
+          ['上書き保存', () => saveEdit(true)],
+        ]);
+        return;
+      }
+      if (!r.ok) { setStatus(`保存失敗: ${await srvErrText(r)}`, true); return; }
+      const j = await r.json();
+      edit.base = { text, sha: j.sha256, mtimeNs: j.mtime_ns };
+      clearDraft(edit.path);
+      mdTexts.set(edit.rel, text);
+      titleCache.delete(edit.rel);
+      const m = mdFiles.find((x) => x.rel === edit.rel);
+      if (m) m.mtime = Math.floor(Number(j.mtime_ns) / 1e6);
+      refreshSidebar();
+      updateEditHint();
+      setStatus(j.changed ? `保存しました: ${edit.rel}` : `変更はありません: ${edit.rel}`);
+    }
+    async function editReloadFromDisk() {
+      if (!edit) return;
+      if (editDirty() && !confirm('未保存の変更を捨ててディスクの内容を読み直しますか？')) return;
+      try {
+        const base = await fetchForEdit(edit.path);
+        edit.base = base;
+        editInput.value = base.text;
+        clearDraft(edit.path);
+        mdTexts.set(edit.rel, base.text);
+        titleCache.delete(edit.rel);
+        updateEditHint();
+        await renderText(base.text);
+        setStatus(`読み直しました: ${edit.rel}`);
+      } catch (e) {
+        setStatus(`読み直し失敗: ${e.message}`, true);
+      }
+    }
+    btnEdit.addEventListener('click', () => { if (editModeOn()) leaveEdit(false); else enterEdit(); });
+    editSaveBtn.addEventListener('click', () => saveEdit(false));
+    editReloadBtn.addEventListener('click', editReloadFromDisk);
+    editInput.addEventListener('input', scheduleEditRender);
+    btnCode.addEventListener('click', async () => {
+      const cur = srvCurrentEntry();
+      if (!cur) return;
+      try {
+        await srvFetch('/api/open-editor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ path: cur.handle.path }),
+        });
+        setStatus(`VS Code で開きました: ${cur.rel}`);
+      } catch (e) {
+        setStatus(`VS Code を開けません: ${e.message}`, true);
+      }
+    });
+    window.addEventListener('beforeunload', (e) => {
+      if (editDirty()) { e.preventDefault(); e.returnValue = ''; }
+    });
+    // ===== /server mode =====
+
+    // Keyboard: Ctrl+R / F5 → reload current file (without reloading the page);
+    // Ctrl+S → save (edit mode); Ctrl+E → toggle edit mode (server mode)
     window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key === 's' && editModeOn()) {
+        e.preventDefault();
+        saveEdit(false);
+        return;
+      }
+      if (e.ctrlKey && !e.altKey && !e.shiftKey && e.key === 'e' && SRV.on && (editModeOn() || !btnEdit.disabled)) {
+        e.preventDefault();
+        if (editModeOn()) leaveEdit(false); else enterEdit();
+        return;
+      }
       if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
         if (currentFile || currentHandle || currentMdRel) {
           e.preventDefault();
@@ -5657,6 +6075,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       if (!mdFiles.length) renderFileList();
       fillHintRecent();
     });
+    bootServerMode(); // no-op unless served by serve.py on localhost
   </script>
 </body>
 </html>
