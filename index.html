@@ -242,6 +242,7 @@
       min-height: 1em;
     }
     .status.error { background: var(--error-bg); border-color: var(--error-border); color: var(--error-fg); }
+    .status { cursor: pointer; }
     .status.hidden { display: none; }
 
     /* ===== 3-pane layout: sidebar(index/search) | preview | toc ===== */
@@ -287,6 +288,20 @@
       color: var(--fg);
     }
     #filter:focus { outline: 2px solid var(--accent-soft-2); border-color: var(--accent); }
+    /* server mode: the folder the list covers + "↑ 上へ" to widen it */
+    .srv-scope { display: flex; align-items: center; gap: 6px; padding: 7px 8px 0; }
+    .srv-scope[hidden] { display: none; }
+    .srv-scope-path {
+      flex: 1; min-width: 0; font-size: 11px; font-family: var(--mono); color: var(--fg-2);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      direction: rtl; text-align: left; /* clip the start of a long path, keep the folder name */
+    }
+    .srv-up {
+      flex: none; font-size: 11px; padding: 2px 8px; cursor: pointer;
+      background: var(--panel-2); color: var(--fg); border: 1px solid var(--border-strong); border-radius: 4px;
+    }
+    .srv-up:hover:not(:disabled) { background: var(--accent-soft); border-color: var(--accent); }
+    .srv-up:disabled { opacity: .45; cursor: default; }
     .side-scroll { flex: 1; overflow-y: auto; }
     .group-head {
       font-size: 11px;
@@ -4205,12 +4220,16 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     <span id="srv-badge" class="srv-badge" hidden>サーバ</span>
     <span id="file-name">（ファイル未選択）</span>
   </header>
-  <div id="status" class="status hidden"></div>
+  <div id="status" class="status hidden" title="クリックで閉じる"></div>
   <div id="main">
     <aside id="sidebar">
       <div class="side-tabs">
         <button class="side-tab active" data-mode="files">ファイル</button>
         <button class="side-tab" data-mode="search">全文検索</button>
+      </div>
+      <div id="srv-scope" class="srv-scope" hidden>
+        <span id="srv-scope-path" class="srv-scope-path"></span>
+        <button id="srv-up" class="srv-up" type="button" title="一覧と全文検索の範囲を 1 つ上のフォルダに広げる">↑ 上へ</button>
       </div>
       <input id="filter" type="search" placeholder="ファイル名で絞り込み…" autocomplete="off">
       <div class="side-scroll">
@@ -4340,6 +4359,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     const fileNameEl = document.getElementById('file-name');
     const reloadBtn = document.getElementById('btn-reload');
     const statusEl = document.getElementById('status');
+    statusEl.addEventListener('click', () => setStatus(null));
+    let statusTimer = 0; // flashStatus: auto-hide timer (declared up here: setStatus may run early)
     const dropOverlay = document.getElementById('drop-overlay');
     const mainEl = document.getElementById('main');
     const sideTabs = Array.from(document.querySelectorAll('.side-tab'));
@@ -4356,9 +4377,13 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     let currentHandle = null; // FileSystemFileHandle (if File System Access API available)
 
     // server mode (local server) — state and elements; the code lives in the "server mode" section below
-    const SRV = { on: false, root: null, rootExplicit: false, roots: [], version: '', truncated: false, imgGen: 0 };
+    // top: how far "↑ 上へ" may widen the list (the md's git repo, else its allowed root)
+    const SRV = { on: false, root: null, top: null, rootExplicit: false, roots: [], version: '', truncated: false, imgGen: 0 };
     let edit = null; // { path, rel, base: { text, sha, mtimeNs } } while the edit pane is open
     const srvBadge = document.getElementById('srv-badge');
+    const srvScope = document.getElementById('srv-scope');
+    const srvScopePath = document.getElementById('srv-scope-path');
+    const srvUpBtn = document.getElementById('srv-up');
     const btnEdit = document.getElementById('btn-edit');
     const btnCode = document.getElementById('btn-code');
     const editInput = document.getElementById('edit-input');
@@ -4545,7 +4570,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         dir.texts = false;
         let res;
         try {
-          res = await (await srvFetch('/api/list?root=' + encodeURIComponent(dir.path) + (withTexts ? '&texts=1' : ''))).json();
+          res = await (await srvFetch('/api/list?root=' + encodeURIComponent(dir.path) + (withTexts ? '&texts=1' : '')
+            + (dir.include ? '&include=' + encodeURIComponent(dir.include) : ''))).json();
         } catch (e) {
           setStatus(`一覧を取得できません: ${e.message}`, true);
           return;
@@ -4903,7 +4929,14 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       }
     }
 
+    // Completion notices (再読み込みしました / 保存しました …) fade out by themselves; errors and
+    // progress messages stay until replaced. A click on the bar closes whatever it shows.
+    function flashStatus(msg, ms = 3000) {
+      setStatus(msg);
+      statusTimer = setTimeout(() => { if (statusEl.textContent === msg) setStatus(null); }, ms);
+    }
     function setStatus(msg, isError = false) {
+      clearTimeout(statusTimer);
       if (!msg) {
         statusEl.classList.add('hidden');
         statusEl.textContent = '';
@@ -5153,7 +5186,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         }
         await selectMd(currentMdRel);
         previewScroll.scrollTop = keepScroll;
-        if (statusEl.classList.contains('hidden')) setStatus(`再読み込みしました: ${currentMdRel}`);
+        if (statusEl.classList.contains('hidden')) flashStatus(`再読み込みしました: ${currentMdRel}`);
         // and, in the background, notice new / removed / edited files in the folder
         if (rootDirHandles.length) reindexFolder().catch(() => { /* ignore */ });
         return;
@@ -5163,7 +5196,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
           const file = await currentHandle.getFile();
           await loadFile(file);
           previewScroll.scrollTop = keepScroll;
-          if (statusEl.classList.contains('hidden')) setStatus(`再読み込みしました: ${file.name}`);
+          if (statusEl.classList.contains('hidden')) flashStatus(`再読み込みしました: ${file.name}`);
         } catch (e) {
           setStatus(`再読み込み失敗: ${e.message}`, true);
         }
@@ -5545,7 +5578,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
           const w = await handle.createWritable();
           await w.write(text);
           await w.close();
-          setStatus(`保存しました: ${handle.name}`);
+          flashStatus(`保存しました: ${handle.name}`);
           return;
         } catch (e) {
           if (e && e.name === 'AbortError') return; // user cancelled the dialog
@@ -5559,7 +5592,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       a.download = name;
       a.click();
       URL.revokeObjectURL(url);
-      setStatus(`ダウンロードしました: ${name}`);
+      flashStatus(`ダウンロードしました: ${name}`);
     });
 
     pasteClearBtn.addEventListener('click', () => {
@@ -5788,8 +5821,9 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       };
       return h;
     }
-    function srvDir(root) {
-      return { kind: 'server-dir', srv: true, name: baseOf(root) || root, path: root, texts: true };
+    // include: the md that was asked for — the server lists it even if the folder is too big to list in full
+    function srvDir(root, include) {
+      return { kind: 'server-dir', srv: true, name: baseOf(root) || root, path: root, texts: true, include: include || null };
     }
     // The md on screen, if it is server-backed (null in single-file / paste / FSA modes).
     function srvCurrentEntry() {
@@ -5826,12 +5860,42 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       }
     }
     async function srvOpenRoot(root, rel, explicit) {
-      const dir = srvDir(root);
+      const dir = srvDir(root, rel ? root + '/' + rel : null);
+      if (!SRV.top || !(root === SRV.top || root.startsWith(SRV.top + '/'))) SRV.top = root; // opened without a path
       SRV.root = root;
       SRV.rootExplicit = !!explicit;
       SRV.truncated = false;
-      await indexDirHandles([dir], [], rel ? dir.name + '/' + rel : null);
-      if (SRV.truncated) setStatus(`ファイルが多すぎるため一覧を途中で打ち切りました (${root}) — ?root= でフォルダを絞ってください`, true);
+      const want = rel ? dir.name + '/' + rel : null;
+      await indexDirHandles([dir], [], want);
+      srvUpdateScope();
+      // bring the md on screen into view (by rel: selectMd marks it .active only after loading it)
+      const act = Array.from(fileListEl.querySelectorAll('.file-item')).find((el) => el.dataset.rel === currentMdRel);
+      if (act) act.scrollIntoView({ block: 'center' });
+      if (want && currentMdRel !== want) setStatus(`${rel} を開けませんでした — 一覧の別のファイルを表示しています`, true);
+      else if (SRV.truncated) setStatus(`md が多すぎるため一覧を途中で打ち切りました (${root}) — フォルダを絞ってください`, true);
+    }
+    function srvUpdateScope() {
+      srvScope.hidden = !SRV.on || !SRV.root;
+      if (srvScope.hidden) return;
+      const top = SRV.top;
+      const inTop = top && (SRV.root === top || SRV.root.startsWith(top + '/'));
+      const label = inTop ? baseOf(top) + SRV.root.slice(top.length) : SRV.root;
+      srvScopePath.innerHTML = '';
+      const b = document.createElement('bdi'); // ltr text inside the rtl (start-clipping) box
+      b.textContent = label + '/';
+      srvScopePath.appendChild(b);
+      srvScopePath.title = SRV.root;
+      srvUpBtn.disabled = !(inTop && SRV.root !== top);
+    }
+    // Widen the list one folder up, keeping the md on screen selected (and ?root= in the URL).
+    async function srvGoUp() {
+      if (srvUpBtn.disabled) return;
+      if (editModeOn()) { setStatus('編集中は一覧の範囲を変えられません — 先に編集を閉じてください', true); return; }
+      const parent = dirOf(SRV.root);
+      if (!parent) return;
+      const cur = srvCurrentEntry();
+      const rel = cur && cur.handle.path.startsWith(parent + '/') ? cur.handle.path.slice(parent.length + 1) : null;
+      await srvOpenRoot(parent, rel, true);
     }
     async function srvOpenPath(p, rootQ) {
       let info;
@@ -5842,6 +5906,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         setStatus(`開けません: ${e.message}`, true);
         return;
       }
+      SRV.top = info.top || null;
       await srvOpenRoot(info.root, info.rel, !!rootQ);
     }
     async function bootServerMode() {
@@ -5856,6 +5921,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       SRV.roots = st.roots || [];
       SRV.version = st.version || '';
       srvBadge.hidden = false;
+      srvUpBtn.addEventListener('click', srvGoUp);
       srvBadge.title = `サーバモード (${SRV.version})\n許可ルート: ${SRV.roots.join(', ')}`;
       btnEdit.hidden = false;
       btnCode.hidden = false;
@@ -6004,7 +6070,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       if (m) m.mtime = Math.floor(Number(j.mtime_ns) / 1e6);
       refreshSidebar();
       updateEditHint();
-      setStatus(j.changed ? `保存しました: ${edit.rel}` : `変更はありません: ${edit.rel}`);
+      flashStatus(j.changed ? `保存しました: ${edit.rel}` : `変更はありません: ${edit.rel}`);
     }
     async function editReloadFromDisk() {
       if (!edit) return;
@@ -6018,7 +6084,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
         titleCache.delete(edit.rel);
         updateEditHint();
         await renderText(base.text);
-        setStatus(`読み直しました: ${edit.rel}`);
+        flashStatus(`読み直しました: ${edit.rel}`);
       } catch (e) {
         setStatus(`読み直し失敗: ${e.message}`, true);
       }
@@ -6036,7 +6102,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ path: cur.handle.path }),
         });
-        setStatus(`VS Code で開きました: ${cur.rel}`);
+        flashStatus(`VS Code で開きました: ${cur.rel}`);
       } catch (e) {
         setStatus(`VS Code を開けません: ${e.message}`, true);
       }
