@@ -385,7 +385,7 @@
     }
     .paste-opts label { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; white-space: nowrap; }
     .paste-opts input[type="checkbox"] { margin: 0; accent-color: var(--accent); }
-    /* サーバモード（serve.py）: 編集ペインの通知行、ヘッダのバッジ、ヒントのルートボタン */
+    /* サーバモード（ローカルサーバ）: 編集ペインの通知行、ヘッダのバッジ、ヒントのルートボタン */
     .edit-notice {
       display: flex;
       flex-wrap: wrap;
@@ -4355,7 +4355,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
     let currentFile = null;
     let currentHandle = null; // FileSystemFileHandle (if File System Access API available)
 
-    // server mode (serve.py) — state and elements; the code lives in the "server mode" section below
+    // server mode (local server) — state and elements; the code lives in the "server mode" section below
     const SRV = { on: false, root: null, rootExplicit: false, roots: [], version: '', truncated: false, imgGen: 0 };
     let edit = null; // { path, rel, base: { text, sha, mtimeNs } } while the edit pane is open
     const srvBadge = document.getElementById('srv-badge');
@@ -5748,8 +5748,8 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       }
     });
 
-    // ===== server mode (serve.py) =====
-    // Served over http://localhost by serve.py, the page can open a file by path
+    // ===== server mode (local server) =====
+    // Served over http://localhost by the local server, the page can open a file by path
     // (?path=<absolute path>), list/search the folder around it, show its images and
     // edit + save it — all through /api/*. Every server-side file is wrapped in a
     // handle object shaped like a FileSystemFileHandle ({ kind, name, getFile() }),
@@ -5850,13 +5850,13 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       try {
         const r = await fetch('/api/status', { cache: 'no-store', signal: AbortSignal.timeout(2000) });
         if (r.ok) st = await r.json();
-      } catch { /* not serve.py, or not running */ }
+      } catch { /* not the local server, or not running */ }
       if (!st || !st.mdv) return;
       SRV.on = true;
       SRV.roots = st.roots || [];
       SRV.version = st.version || '';
       srvBadge.hidden = false;
-      srvBadge.title = `サーバモード (serve.py ${SRV.version})\n許可ルート: ${SRV.roots.join(', ')}`;
+      srvBadge.title = `サーバモード (${SRV.version})\n許可ルート: ${SRV.roots.join(', ')}`;
       btnEdit.hidden = false;
       btnCode.hidden = false;
       srvUpdateButtons();
@@ -5899,7 +5899,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       editHint.classList.toggle('dirty', d);
       editSaveBtn.disabled = !d;
     }
-    // The textarea normalizes CRLF to LF, so compare against LF text; serve.py restores
+    // The textarea normalizes CRLF to LF, so compare against LF text; the server restores
     // the file's original line endings (and BOM) when saving.
     function normEol(s) { return s.replace(/\r\n?/g, '\n'); }
     async function fetchForEdit(path) {
@@ -6075,7 +6075,7 @@ globalThis["mermaid"] = globalThis.__esbuild_esm_mermaid_nm["mermaid"].default;
       if (!mdFiles.length) renderFileList();
       fillHintRecent();
     });
-    bootServerMode(); // no-op unless served by serve.py on localhost
+    bootServerMode(); // no-op unless served by the local server on localhost
   </script>
 </body>
 </html>
